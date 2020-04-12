@@ -5,7 +5,7 @@ export const isLocalDev = process.env.NODE_ENV === 'development';
 
 let host = window.location.host.split('.')
 
-export const ledgerId = isLocalDev ? "daml-ui-template" : host[0];
+export const ledgerId = isLocalDev ? "openwork-poll" : host[0];
 
 let apiUrl = host.slice(1)
 apiUrl.unshift('api')

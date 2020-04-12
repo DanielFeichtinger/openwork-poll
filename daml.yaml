@@ -1,13 +1,15 @@
 sdk-version: 0.13.55
-name: daml-ui-template
+name: openwork-poll
 source: daml
 parties:
+  - Admin
   - Alice
   - Bob
+  - Charlie
 version: 0.0.1
 init-script: Main:setup
 sandbox-options:
-  - --ledgerid=daml-ui-template
+  - --ledgerid=openwork-poll
   - -w
 dependencies:
   - daml-prim

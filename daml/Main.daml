@@ -6,35 +6,222 @@ module Main where
 
 import Daml.Script
 import Prelude hiding (submit)
+import DA.List
 
-type AssetId = ContractId Asset
-
-template Asset
+template UserSession
   with
-    issuer : Party
-    owner  : Party
-    name   : Text
+    operator : Party
+    user : Party
   where
-    ensure name /= ""
-    signatory issuer
-    controller owner can
-      Give : AssetId
-        with
-          newOwner : Party
+    signatory user
+    key user : Party
+    maintainer key
+
+    controller operator can
+      UserSessionAck : ContractId PollApp
         do
-          create this with
-            owner = newOwner
+          exerciseByKey @PollApp operator AddUser with ..
+
+template PollApp
+  with
+    operator : Party
+    users : [Party]
+    polls : [Text]
+  where
+    signatory operator
+    key operator : Party
+    maintainer key
+    observer users
+
+    controller operator can
+      AddUser : ContractId PollApp
+        with user : Party
+        do
+          create User with ..
+          forA polls (\pollId -> exerciseByKey @Poll (operator, pollId) AddObs with user)
+          create this with users = user :: users
+    
+      AddPoll : ContractId PollApp
+        with pollId : Text
+        do
+          create this with polls = pollId :: polls
+
+template User
+  with
+    operator : Party
+    user : Party
+  where
+    signatory operator
+    key (operator, user) : (Party, Party)
+    maintainer key._1
+
+    controller user can
+      nonconsuming CreatePoll : ContractId Poll
+        with
+          id : Text
+          description : Text
+          options : [Text]
+        do
+          createdAt <- getTime
+          (appId, appData) <- fetchByKey @PollApp operator
+          exercise appId AddPoll with pollId = id
+          create Poll with
+            creator = user
+            obs = appData.users
+            respondedUsers = []
+            ..
+      
+      nonconsuming Vote : ()
+        with
+          pollId : Text
+          responseIndex : Int
+        do
+          exerciseByKey @Poll (operator, pollId) AddVote with ..
+
+template Poll
+  with
+    id : Text
+    operator : Party
+    creator : Party
+    obs : [Party]
+    description : Text
+    createdAt : Time
+    options : [Text]
+    respondedUsers : [Party]
+  where
+    signatory operator, creator
+    observer obs
+    key (operator, id) : (Party, Text)
+    maintainer key._1
+
+    ensure id /= ""
+        && description /= ""
+        && length options > 0
+    
+    controller operator can
+      AddObs : ContractId Poll
+        with user : Party
+        do
+          create this with obs = user :: obs
+    
+    choice AddVote : ()
+        with
+          user : Party
+          responseIndex : Int
+        controller user
+        do
+          assert (responseIndex < length options)
+          case elemIndex user respondedUsers of
+            None -> do
+              create this with
+                respondedUsers = user :: respondedUsers
+              create Response with pollId = id; ..
+              return ()
+            Some _ -> do
+              create this
+              exerciseByKey @Response (operator, user, id) UpdateVote with
+                newResponseIndex = responseIndex
+              return ()
+
+template Response
+  with
+    operator : Party
+    user : Party
+    pollId : Text
+    responseIndex : Int
+  where
+    signatory operator, user
+    key (operator, user, pollId) : (Party, Party, Text)
+    maintainer key._1
+
+    controller user can
+      UpdateVote : ContractId Response
+        with newResponseIndex : Int
+        do
+          create this with responseIndex = newResponseIndex
+
+e2e = scenario do
+  admin   <- getParty "Admin"
+  alice   <- getParty "Alice"
+  bob     <- getParty "Bob"
+  charlie <- getParty "Charlie"
+
+  let pollId = "foo123"
+
+  app <- admin `submit` do
+    create PollApp with
+      operator = admin
+      users = []
+      polls = []
+
+  alice `submit`
+    create UserSession with
+      user = alice
+      operator = admin
+  
+  bob `submit`
+    create UserSession with
+      user = bob
+      operator = admin
+  
+  charlie `submit`
+    create UserSession with
+      user = charlie
+      operator = admin
+  
+  admin `submit` do
+    exerciseByKey @UserSession alice UserSessionAck
+    exerciseByKey @UserSession bob UserSessionAck
+    exerciseByKey @UserSession charlie UserSessionAck
+  
+  -- Alice creates a poll and votes on it
+  alice `submit` do
+    exerciseByKey @User (admin, alice) CreatePoll with
+      id = pollId
+      description = "Where should we get lunch?"
+      options = ["Larry's", "Barry's", "Sally's"]
+    
+    exerciseByKey @User (admin, alice) Vote with
+      pollId, responseIndex = 2
+  
+  -- Bob votes
+  bob `submit` do
+    exerciseByKey @User (admin, bob) Vote with
+      pollId, responseIndex = 0
+  
+  -- Charlie votes
+  charlie `submit` do
+    exerciseByKey @User (admin, charlie) Vote with
+      pollId, responseIndex = 0
+  
+  -- Alices votes again, should not increase the count
+  alice `submit` do
+    exerciseByKey @User (admin, alice) Vote with
+      pollId, responseIndex = 1
+
+    (_, pollData) <- fetchByKey @Poll (admin, pollId)
+    assert (3 == length pollData.respondedUsers)
+
+  -- Alice signs up again, should not result in a duplicate
 
 setup : Script ()
 setup = do
+  admin <- allocatePartyWithHint "Admin" $ PartyIdHint with partyIdHint = "Admin"
   alice <- allocatePartyWithHint "Alice" $ PartyIdHint with partyIdHint = "Alice"
   bob <- allocatePartyWithHint "Bob" $ PartyIdHint with partyIdHint = "Bob"
+  charlie <- allocatePartyWithHint "Charlie" $ PartyIdHint with partyIdHint = "Charlie"
 
-  submit alice do createCmd Asset with issuer = alice; owner = alice; name = "TV"
-  submit alice do createCmd Asset with issuer = alice; owner = alice; name = "Car"
-  submit alice do createCmd Asset with issuer = alice; owner = alice; name = "Boat"
-
-  submit bob do createCmd Asset with issuer = bob; owner = bob; name = "Bike"
-  submit bob do createCmd Asset with issuer = bob; owner = bob; name = "House"
-
+  submit admin do
+    createCmd PollApp with
+      operator = admin
+      users = []
+      polls = []
+  
+  submit admin do
+    exerciseByKeyCmd @PollApp admin AddUser with user = alice
+  submit admin do
+    exerciseByKeyCmd @PollApp admin AddUser with user = bob
+  submit admin do
+    exerciseByKeyCmd @PollApp admin AddUser with user = charlie
+  
   pure ()
