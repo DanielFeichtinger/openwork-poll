@@ -59,16 +59,10 @@ daml codegen ts .daml/dist/openwork-poll-0.0.1.dar -o daml2ts -p package.json
 yarn workspaces run build
 ```
 
-Then, zip either the Javascript build output:
+Then, zip the Javascript build output:
 
 ```bash
 (cd ui-js && zip -r ../openwork-poll.zip build)
-```
-
-Or the Typescript build output:
-
-```bash
-(cd ui-ts && zip -r ../openwork-poll.zip build)
 ```
 
 Afterwards, select the "UI Assets" tab of your chosen ledger on the DABL website, upload the ZIP file `openwork-poll.zip` you have just created and publish it.
